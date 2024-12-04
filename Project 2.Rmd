@@ -1,0 +1,457 @@
+---
+title: "Predicting the Change of Close Price from Ppen Price of the Top 5 Cryptocurrencies in the Market"
+author: "James Zhao"
+date: "2024-05-02"
+output: pdf_document
+header-includes:
+  - \renewcommand{\figurename}{}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE,message = FALSE)
+```
+
+\newpage
+\tableofcontents
+\listoffigures
+\listoftables
+\newpage
+
+```{r}
+# Load Dataset
+crypto <- read.csv("C:/Users/James Z/Desktop/2024 Spring/STA 363/Project/Project2_dataset/crypto-markets.csv")
+```
+
+## Abstract
+
+Predicting how much close price changes from the open price of cryptocurrencies is critical to all investors for selecting the appropriate investment strategy to make profits from the non-stationary cryptocurrency market. In this report, we discuss the process of predicting the price difference in the cryptocurrency market. Data are collected from the real market which includes historical cryptocurrency prices for all tokens, but we only focus on analyzing the top 5 cryptocurrencies by market capitalization, which represents the total value of the token that have been mined, in current market. We detail the procedures of analysis, and compare the prediction accuracy of three different methods. Based on our chosen performance indicator (RMSE),random forest, elastic net, and bagged forest possess the best predictive accuracy. We discuss our findings, and limitations of the study, in the following paper.
+
+## Section 1: Introduction
+
+In this report, the primary goal is to make predictions of the difference between close and open price of the top 5 cryptocurrencies (ranked by their market capitalization which represents the total value that has been mined) using three methods, comparing their performance with respect to the chosen metrics RMSE and determining the best prediction model/algorithm which can be used in real market. It is worthwhile to perform the prediction task because the cryptocurrency market reveals signs of continuing growth in values and potential opportunities that leads to the urgent needs for an accurate prediction model which contributes to investors making profits. 
+
+In brief, the goal in this report is predicting the the amount of change of close price from the open price of selected cryptocurrencies using selected features in the data. The data set we use in this report it named "Every Cryptocurrency Daily Market Price" (we will just refer it as data in the rest of the report). We will compare the performance of three prediction methods (regression models, KNN algorithm, and tree and forest models) and determine the best prediction model/algorithm according to the Root-Mean-Square Error (RMSE). About the data set, there are 942297 observations and 13 columns in the raw data, which contains all historical cryptocurrency information and prices of the top 5 cryptocurrencies. Moreover, we have information on name of the cryptocurrency, the date of trading in format of yyyy-mm-dd, the open price of the cryptocurrency each day in US dollars, the highest trading price of cryptocurrency each day in US dollars, the lowest trading price of cryptocurrency each day in US dollars, the close price of the cryptocurrency each day in US dollars, and the volume of trade each day for each cryptocurrency. Although these may not include information of all columns, they are accessible through link: <https://www.kaggle.com/datasets/jessevent/all-crypto-currencies?resource=download>.
+
+## Section 2: Data Cleaning and EDA
+
+Before our analysis, it is important to take a look at the raw data set and make sure it is ready for analysis. Firstly, we will take a look at the data set in general:
+
+```{r}
+# Check missing values and data dimension
+missing <- sum(is.na(crypto))
+dims <- dim(crypto)
+# Output Result
+dataCheck <- data.frame("Missingness" = missing,
+                        "Rows" = dims[1],
+                        "Columns" = dims[2])
+knitr::kable(dataCheck, caption = "Raw Data Dimension and Missingness")
+```
+
+
+Table 1 provides a general description of the data. We can see that data set has 942297 observations and 13 columns, and there is no missing value in the data set. According to our research question, we will focus on only the top 5 cryptocurrencies in this report, so we will subset a new data set from this raw data set and include only the rows of these cryptocurrencies. We wouldn't consider using the column of "date" either because we are working on prediction instead of forecast. Besides, since our response variable is the difference between close and open price of the cryptocurrency (more specifically close price - open price), we will create another column using the close price subtracting the open price. 
+
+```{r, fig.cap="Figure 2.1 - Distributions of four categorical variables in data"}
+# Subseting only the top 5 ranked cryptocurrency nowadays
+crypto1 <- crypto[which(crypto$name == "Bitcoin" |crypto$name == "Ethereum"|crypto$name == "Binance Coin"|crypto$name == "Tether"|crypto$name == "Sola Token"),]
+# Load packages
+suppressMessages(library(ggplot2))
+suppressMessages(library(gridExtra))
+# Plot showing redundant information
+p1 <- ggplot(crypto1, aes(x = as.factor(crypto1$slug))) + geom_bar( ) + labs(x="slug")
+p2 <- ggplot(crypto1, aes(x = as.factor(crypto1$symbol))) + geom_bar( ) + labs(x="symbol")
+p3 <- ggplot(crypto1, aes(x = as.factor(crypto1$name))) + geom_bar( ) + labs(x="name")
+order1 <- c(16,1,3,1452,8)
+crypto1$ranknow <- factor(crypto1$ranknow, levels = order1)
+p4 <- ggplot(crypto1, aes(x = as.factor(crypto1$ranknow))) + geom_bar( ) + labs(x="rank")
+gridExtra::grid.arrange(p1,p2,p3,p4, ncol = 2)
+```
+
+As we take a glance of the distributions of our four categorical variables in Figure 2.1, we notice that, for each categorical variable, there are exactly 5 sub-categories and also equal number of rows for each sub-category. This suggests that these four categorical variables gives us the same information. Hence, we would only keep one of the four variables in our data set.
+
+Additionally, based on the column description of the data set, we know that the close ratio is computed using all of high, low, open, and close prices. However, we will not know what the close price is when implementing real-world predictions. Thus, we will exclude this colunm from our data set too. 
+
+```{r}
+# Excluding columns with singularities and columns that involves calculation of the response variable
+crypto1 <- crypto1[,-c(1:2,4:5,12)]
+```
+
+Furthermore, we explore the correlation between all numerical variables except our response variable to check whether multicollinearity occurs:
+
+```{r, fig.cap="Figure 2.2 - Correlation of possible features"}
+# Packages for correlation plot
+library(corrplot)
+library(RColorBrewer)
+# Plot correlation of numerical features
+M <-cor(crypto1[,c(2:4,6:8)])
+corrplot(M, method="pie", type="upper")
+```
+
+According to Figure 2.2, we can tell that the open price, the high price, and the low price are perfectly correlated, which is a severe problem for regression analysis. In fact, based the column description of the data, we know that the price spread is calculated by using the highest price minus the lowest price. Since we are able to obtain similar information from one column than two columns that are perfectly correlated with other feature, we can simply remove those two problematic columns from our data. Then, we will plot correlation of our numerical variables again to check whether we are still struggling with high correlation issue.
+
+```{r, fig.cap="Figure 2.3 - Correlation check after removing problematic colums"}
+# Creating new response variable due to problem of perfect correlation
+crypto1$diff <- crypto1$close - crypto1$open
+# Excluding perfectly correlated columns
+crypto1 <- crypto1[,-c(3:5)]
+# Plot correlation again to check
+M <-cor(crypto1[,c(2:5)])
+corrplot(M, method="pie", type="upper")
+```
+
+Figure 2.3 suggests that we no longer have any column that are perfectly correlated, but we are left with some columns with high correlation for which we will pay more attention on. Nevertheless, we are still one step from performing and assessing prediction. Because we intended to train regression models, it is necessary to check the shape assumptions between our features and the response variable:
+
+```{r, fig.cap="Figure 2.4 - Shape assumption for regression"}
+# Plots checking shape assumption for regression
+p11 <- ggplot(crypto1, aes(x = open, y = diff)) + geom_point( ) + labs(y="difference")
+p12 <- ggplot(crypto1, aes(x = volume, y = diff)) + geom_point( ) + labs(y="difference")
+p13 <- ggplot(crypto1, aes(x = market, y = diff)) + geom_point( ) + labs(y="difference")
+p14 <- ggplot(crypto1, aes(x = spread, y = diff)) + geom_point( ) + labs(y="difference")
+gridExtra::grid.arrange(p11,p12,p13,p14, ncol = 2)
+```
+
+Based on Figure 2.4, we observe some fan-shaped pattern between the numerical features and the response variable. This may result from the high correlation problem between our features. Now we are ready to start training prediction models/algorithms and assess their performances. Our final data dimension are provided below in Table 2.
+
+```{r}
+# Scale features
+crypto1[,c(2:5)] <- scale(crypto1[,c(2:5)])
+knitr::kable(dim(crypto1),caption = "Dimension of Final Data Set")
+```
+
+## Section 3: Ridge Regression, Lasso, and Elastic Net. 
+
+### Section 3.1: Introduction
+
+The first prediction method we use in this report is elastic net because, theoretically, high correlation between our features would result in large estimates of coefficient variance, which would be problematic for further analysis.
+
+### Section 3.2: Method
+
+In least-square linear regression, we get coefficient estimates by minimizing the residual sum of square (RSS), which is the square difference between true response value and estimated response value. However, given the fact that multicollinearity exists, we employ another regression model that choose coefficient estimated by minimizing $RSS + \lambda \sum{((1-\alpha)\hat{\beta_j}^2 + \alpha |{\hat{\beta_j}}|)}$, where the latter term is the penalty term we are trying to minimize as well. When choosing coefficient estimates of elastic net model, there are two tuning parameters called lambda and alpha. Lambda controls the amount of shrinkage we want on coefficient estimates. Besides, since we know the penalty term of ridge is $\lambda \sum{\hat{\beta_j}^2}$ and that of lasso is $\lambda \sum{|{\hat{\beta_j}}|}$, elastic net is just lasso when alpha is one and it is ridge when alpha equals zero. Hence, alpha balances between the coefficient estimates shrinkage of ridge and selection property of lasso in elastic net.
+
+In general, we will create one sequence of possible values for each tuning parameter, lambda and alpha, and find the value of the two parameters that generates the lowest test RMSE using 10-fold cross validation. For each possible value of alpha in the sequence, we run 10-fold cross validation for each possible value of lambda and compute the test RMSE for each lambda. Then we find the lambda with the lowest test RMSE and store the result into a data frame in the row with corresponding alpha value. After we run through all possible values of alpha, we find the lowest test RMSE in the data frame and output the information in the row. Thus, these are our final tuning parameter values and test RMSE of the model.
+
+### Section 3.3: Result
+
+After training the elastic net model, as well as ridge regression and lasso that are trained simultaneously, we examine their predicting performances using our chosen metrics RMSE. Furthermore, to emphasize how elastic net solves high correlation between features and improves predictive accuracy, we fit linear regression and compare its RMSE value with the results of elastic net.
+
+```{r}
+# Fit ridge, lasso, elastic net
+# Load the Library
+library(glmnet)
+# Set seed
+set.seed(1010)
+# Create design matrix, remove response
+XD <- model.matrix(diff~., data = crypto1)[,-1]
+# Create sequence for possible values of alpha
+a <- seq(from = 0, to =1 , by =.01)
+# Create storage space to find minimum MSE
+storage <- data.frame("alpha" = a, 
+                      "lambda"=rep(NA, length(a)),
+                      "MSE"=rep(NA, length(a)))
+# Run 10-fold Cross Validation
+for(i in 1:length(a)) {
+  # run 10 fold cv for each choice of alpha
+  cv.out2 <- cv.glmnet(XD, crypto1[,"diff"], alpha = a[i], lambda = seq(from = 0, to = 50, by = .5) )
+  # store lambda
+  storage[i,2] <- cv.out2$lambda.min
+  # store mse
+  storage[i,3] <- min(cv.out2$cvm)
+}
+# Compute RMSE and store in the storage space
+storage$RMSE <- sqrt(storage$MSE)
+# Output smallest RMSE result
+rmse.ElasticNet <- storage[which.min(storage$RMSE),"RMSE"]
+
+# Creates 10 tickets representing 10 folds
+tickets <- rep(1:10,519)
+# Set seed
+set.seed(1010)
+# Assign folds to each row
+folds <- sample(tickets, nrow(crypto1) , replace = FALSE)
+# Create storage
+pred <- data.frame("diff" = rep(NA,nrow(crypto1)))
+# 10-fold CV
+for(f in 1:10) {
+  # Create train and validation data
+  newTrain <- crypto1[-which(folds==f),]
+  validation <- crypto1[which(folds==f),]
+  # Get prediction
+  lr_m <- lm(diff~., data=newTrain)
+  lslr_pred <- predict(lr_m, newdata=validation)
+  # Store prediction
+  pred[which(folds==f),"diff"] <- lslr_pred
+}
+# Compute rmse
+rmse.lslr <- compute_RMSE(crypto1$diff, pred$diff)
+tuning <- paste("$\\alpha=$",storage[which.min(storage$RMSE),"alpha"],",","$\\lambda=$",storage[which.min(storage$RMSE),"lambda"])
+# Output
+regression_r <- data.frame("Model" = c("Elastic Net","LSLR"),
+                           "Tuning_Parameter" = c(tuning,""),
+                           "Test_RMSE" = c(rmse.ElasticNet,rmse.lslr))
+knitr::kable(regression_r, caption="Prediction Accuracy Comparison of Regression Models")
+```
+
+According to Table 3, we get alpha being 0.45 and lambda being 0.5, which suggests that, in terms of minimizing RMSE, the elastic net outperforms ridge regression and lasso since alpha doesn't take value of either 0 or 1. To re-emphasize, elastic net becomes lasso when alpha is 1 and it is ridge when alpha equals 0. Lambda equals 0.5 prevents us from getting exploded coefficient estimates. Since elastic net not only shrinks coefficient estimates but also perform selection on features to suggest a better-fit and easier interpreted model, we compare the coefficient estimates between least-square linear regression and elastic net:
+
+```{r}
+set.seed(1010)
+# Obtaining coefficients
+# Train Elastic Net
+elastic.final <- glmnet(XD, crypto1[,"diff"], alpha =.45 ,
+                      lambda = 0.5)
+# Store the coefficients
+elastic.betas <- as.numeric(coefficients(elastic.final))
+# Fit linear regression
+lslr.final <- glmnet(XD, crypto1[,"diff"], alpha =0 ,lambda = 0)
+# Store linear regression coefficients
+lslr.betas <- as.numeric(coefficients(lslr.final))
+# Create a data frame
+Betas <- data.frame("LSLR" = lslr.betas, "Elastic Net" = elastic.betas)
+# Set correct feature names
+rownames(Betas)[-1] <- colnames(XD)
+rownames(Betas)[1] <- "Intercept"
+# Output
+knitr::kable(Betas, caption = "Coefficient estimates")
+```
+
+From Table 4, compared with coefficient estimates of LSLR, we find that the coefficient estimate of sub-category Sola cryptocurrency of feature name is being reduced to zero as a result of elastic net performing selection, but coefficient estimates of other features doesn't change much. Moreover, since we have already scaled all numerical features before we train models, the coefficient estimates also serve as an indicator for feature importance. Based on the coefficient table, we observe that market capitalization has the highest feature importance, which means that it contributes toward the prediction generated from elastic net the most. 
+
+Referring back to Table 3, our test RMSE of Elastic Net is 145.733, which indicates that, on average, our prediction on the difference between the close and open price differs from the true price difference by 145.733 US dollars. 
+
+In sum, elastic net works well when there are highly correlated features, yielding lower variances of coefficient estimates than LSLR. It is also very efficient since, when we take values of alpha from 0 to 1 in sequence to run elastic net, we also run ridge and lasso simultaneously. In addition, elastic net outperforms ridge as it perform feature selections and lasso as it does some selection but less than lasso intended to do. However, the computational complexity could still be problematic when we have a large data set because there are two tuning parameters to monitor.
+
+## Section 4: KNN
+
+### Section 4.1: Introduction
+
+Other than regression models like LSLR and elastic net that are bounded by shapes, K nearest neighbor (KNN) is another useful and more flexible algorithm for prediction since it is not restricted by shape assumptions. Particularly, KNN doesn't predict using parameters of a mathematical equation and can be more flexible to portrait the patterns of training data.
+
+### Section 4.2: Method
+
+Similar to Section 3, we still apply 10-fold cross validation to obtain the test RMSE and compare the results. The main difference is the algorithm we use. For KNN, the first step is to convert all categorical features into binary variables, which allows us to compute distance measures (we use Gower's distance in this report) between rows using chosen distance metrics. After the conversion, we run 10-fold cross validation on KNN and get the training and validation data in each loop. How KNN predicts is that we compute the distance measure to determine how similar a row in the validation data is to all rows in the training data. Then we pull out the K rows from the training data that are closest to the row in the validation data by distance measure. Lastly, we  take the average value of response variable for these K selected rows as our prediction for the row in the validation data. Since we are given a large data set and it would be computationally expensive to run for a range of K values and observe each individual's performance, we determine our K to be the square root of number of rows, which in this case is 72.
+
+### Section 4.3: Result
+
+After implementing KNN for prediction and evaluating its predictive accuracy using the chosen metrics RMSE, our results are exhibited in the following table.
+
+```{r}
+# Creat new data set
+crypto2 <- crypto1
+# Convert categorical variable to binary variable
+crypto2 <- fastDummies::dummy_cols(crypto2, select_columns = c("name"), remove_selected_columns = TRUE, remove_first_dummy  = TRUE)
+# KNN function using Gower's distance
+knnGower <- function(trainX, testX, trainY, K){
+  
+  if(nrow(testX)==1){
+    # Convert the data
+    dataAll <- rbind(testX,trainX)
+    trainX <- model.matrix(1:nrow(dataAll)~ ., data = dataAll)[-1,-1]
+    testX <- model.matrix(1:nrow(dataAll)~ ., data = dataAll)[1,-1]
+  } else{
+    trainX <- model.matrix(1:nrow(trainX)~ ., data = trainX)[,-1]
+    testX <- model.matrix(1:nrow(testX)~ ., data = testX)[,-1]
+  }
+  
+  #if(class(testX)=="numeric"){
+  #  testX <- t(data.frame(testX))
+  #}
+  
+  # Find the Gower Distance
+  gowerHold <- StatMatch::gower.dist( testX, trainX)
+  # For each row, find the k smallest
+  neighbors <- apply(gowerHold, 1, function(x) which(x %in% sort(x)[1:K]))
+  
+  if(class(neighbors)[1]=="integer"){
+    preds <- trainY[neighbors]
+  }
+  
+  # Take the mean to get the prediction
+  if(class(neighbors)[1]=="matrix"){
+    preds <- apply(neighbors, 2,function(x) mean(trainY[x]))
+  }
+  
+  if(class(neighbors)[1]=="list"){
+    preds <- lapply(neighbors, function(x) mean(trainY[x]))
+    preds <- unlist(preds)
+  }
+  # Return the predictions
+  unlist(preds)
+}
+# RMSE function
+compute_RMSE <- function(truth, prediction){
+  # Part 1
+  part1 <- truth - prediction
+  #Part 2
+  part2 <- part1^2
+  #Part 3: RSS
+  part3 <- sum(part2)
+  #Part4: MSE
+  part4 <- 1/length(prediction)*part3
+  # Part 5:RMSE
+  sqrt(part4)
+}
+# Creates 10 tickets representing 10 folds
+tickets <- rep(1:10,519)
+# Set seed
+set.seed(1010)
+# Assign folds to each row
+folds <- sample(tickets, nrow(crypto2) , replace = FALSE)
+# Create storage
+pred <- data.frame("diff" = rep(NA,nrow(crypto2)))
+stor <- data.frame("K" = c(3:30),
+                   "RMSE" = rep(NA, length(3:30)))
+# 10-fold CV
+# For each possible value of K
+# for(k in 3:30) {
+# For large data set, choose k=sqrt(n), which n is the number of rows
+k<-round(sqrt(nrow(crypto2)))
+  for(f in 1:10) {
+    # Create train and validation data
+    newTrain <- crypto2[-which(folds==f),]
+    validation <- crypto2[which(folds==f),]
+    # Get prediction
+    knnPred <- knnGower(newTrain[,-5],validation[,-5], newTrain[,5], K =k)
+    # Store prediction
+    pred[which(folds==f),"diff"] <- knnPred
+  }
+  # Compute and store rmse for each value of k
+  # stor[k-2,"RMSE"] <- 
+    rmse.knn <- compute_RMSE(crypto2$diff, pred$diff)
+# }
+# stor[which.min(stor$RMSE),]
+Result_KNN <- data.frame("Method" = c("K Nearest Neighbor"),
+                         "K" = 72,
+                         "Test_RMSE" = rmse.knn)
+knitr::kable(Result_KNN, caption="KNN Prediction")
+```
+
+According to Table 5, we notice that when K=72, our test RMSE is 149.5483. This indicates that our predicted value of difference between close and open price of cryptocurrency differs, on average, by 149.5483 US dollars from the true price difference. 
+
+To sum up, it is acknowledged that KNN has more flexibility of adapting patterns in training data and are not restricted by shapes and lines like regression model. However, it is doubtful whether K=72 is the optimal value for K that generates the lowest RMSE. But in the condition with large data set, it would be very computationally expensive to run for all possible values of K and determine the optimal K value. Regarding prediction performance, however, our result suggests that KNN performs a little worse than elastic net since it generates higher RMSE value, which means the prediction of KNN deviates more from the truth on average than that of elastic net. This may possibly be caused by not choosing the optimal K, which would be too computationally expensive to simulate and find with large data. 
+
+## Section 5: Regression Tree, Bagged Forest, and Random Forest
+
+### Section 5.1: Introduction
+
+Finally, tree and forest model is another powerful tool for prediction task but has more interpretability than other prediction models in this report. Since our response variable is numerical, we limit our choice to using only regression tree, bagged forest, and random forest. Comparing to regression model and KNN algorithm which involves prediction using mathematical function and averaging values of the neighbors, tree and forest models treat data as clusters defined by features, and rows of data in different cluster tends to have different response value. The hierarchical structure of the regression tree reveals splitting rules and values we use for each split, which illustrates feature importance by presenting how often we use a feature for split. 
+
+### Section 5.2: Method
+
+For regression tree, we start from a root node that contains all rows in the data. We then find splitting rule to split data in the root node into two leaves, and we decide the splitting rule depends on the training RSS for each possible split of every feature considered. In fact, we determine the split that gives us the smallest RSS. This is how we make one split from the root node, and we grow regression tree using a process called recursive binary split, which means that all splits depends on the last split; and if we no longer have split that has lower RSS, like what we did for one split from root node, than last split, we stop. This is how we grow regression tree to the biggest size in our belief. Then, we perform a process called pruning, which cuts leaves from the full tree we grew and check if it improves test RMSE by applying 10-fold cross validation. As a result, we determine the pruned tree that has the lowest RMSE as our final model and output its test RMSE to compare the predicting accuracy with other models/algorithms.
+
+On the other hand, forest models employ multiple trees for prediction, and it has each tree grow on multiple bootstrap samples to their biggest size. Since we are growing 1000 trees for the forest models in this report, we need 1000 training data, which are so-called bootstrap samples, created by rows in the data with replacement. It means that we grow trees on different subset of the data. Then we will obtain out-of-bag (OOB) prediction using the rows from the data that are not in the bootstrap samples of each tree model, and then use these predictions to calculate the estimated RMSE. For the purpose of comparing model performances on the same scale, we still have to run 10-fold cross validation of these forest models. 
+
+Moreover, despite the similar process to build forest models, the main difference between bagged forest and random forest is the number of features considered during each split of every tree grew across the forest. In this case, bagged forest considers all five features but random forest only considers 2 random features. In contrast with bagged forest, random forest model not only grows forest faster because it considers less feature for each split of tree but also embraces more diversity which serves as another factor for its better prediction.
+
+### Section 5.3: Result
+
+Let's first look at how we pruned the regression tree with respect to test RMSE.
+
+```{r, fig.cap="Figure 5.3.1 - Pruned Tree versus Full Tree"}
+# Set seed
+set.seed(111)
+library(rpart)
+library(rpart.plot)
+# Grow full tree
+tree <- rpart(diff~., method ="anova", data=crypto1)
+# Find the number of splits with the smallest test RMSE
+toprune <- which.min(tree$cptable[,4])
+# Grow the pruned tree
+pruned.tree<- prune(tree, cp=tree$cptable[toprune,"CP"])
+# Plot trees
+rpart.plot(pruned.tree)
+rpart.plot(tree)
+```
+
+According to Figure 5.3.1, we compare the full regression tree and the pruned regression tree. We notice that there are total of 12 splits in the full tree, whereas retaining only 6 splits in the pruned tree. Furthermore, we observe that the most frequently used splitting rule is using the values of feature market capitalization, which aligns with our finding in Section 3.3 regarding the feature importance for elastic net. Comparing with the feature importance of elastic net indicated by the scaled coefficient estimates, the tree plot illustrates the feature importance more obvious because it utilizes this feature most frequently in splitting. We will also examine feature importance of bagged forest and random forest model later in this section and see if we get the same result.
+
+Additionally, with a fundamental understanding of our pruned tree, we run 10-fold cross validation on the pruned tree, bagged forest, and random forest, and compare their predictive ability using RMSE.
+
+```{r}
+# Import library
+suppressMessages(library(randomForest))
+# Set seed
+set.seed (1010)
+# Get 10 tickets for assigning folds
+tickets <- rep(1:10,519)
+# Assign folds to each row of data
+folds <- sample(tickets, nrow(crypto1) , replace = FALSE)
+# Create prediction storage for regression tree, bagged forest, and random forest
+prediction.tree <- rep(0, nrow(crypto1))
+prediction.bag <- rep(0, nrow(crypto1))
+prediction.random <- rep(0, nrow(crypto1))
+# 10-fold CV
+for(f in 1:10) {
+  # New train data
+  newTrain <- crypto1[-which(folds==f),]
+  # Validation data
+  validation <- crypto1[which(folds==f),]
+  # Grow full tree
+  tree <- rpart(diff~., method ="anova", data=newTrain)
+  # Find the number of splits with the smallest test RMSE
+  toprune <- which.min(tree$cptable[,4])
+  # Grow the pruned tree
+  pruned.tree<- prune(tree, cp=tree$cptable[toprune,"CP"])
+  # Store tree prediction
+  prediction.tree[which(folds==f)] <- predict(pruned.tree, newdata = validation)
+  # Train bagged forest
+  bagForest <- randomForest(diff~ ., data = newTrain , mtry = 5, ntree = 1000, compete= FALSE)
+  # Store prediction
+  prediction.bag[which(folds==f)] <- predict(bagForest, newdata = validation)
+  # Train random forest
+  randomForest <- randomForest(diff~ ., data = newTrain , mtry = sqrt(5), ntree = 1000, compete= FALSE)
+  # Store prediction
+  prediction.random[which(folds==f)] <- predict(randomForest, newdata = validation)
+}
+# Compute RMSE
+rmse.tree <- compute_RMSE(crypto1$diff, prediction.tree)
+rmse.bagForest <- compute_RMSE(crypto1$diff, prediction.bag)
+rmse.randomForest <- compute_RMSE(crypto1$diff, prediction.random)
+# Output
+ForestTree <- data.frame("Method" = c("Pruned Tree", "Bagged Forest", "Random Forest"),
+                         "Number_of_Splits" = c(6,"",""),
+                         "Test_RMSE" = c(rmse.tree,rmse.bagForest,rmse.randomForest))
+knitr::kable(ForestTree,caption="Regression Tree, Bagged Forest, and Random Forest Predictive Accuracy")
+```
+
+Table 6 suggests that random forest model predicts the best with the lowest RMSE value among all three models. In fact, random forest model's prediction of the difference between close and open price of cryptocurrency, on average, differs from the true price difference by 144.7091 US dollars. 
+
+Besides, we are interested in what feature(s) are important for forest models in prediction task in this report. Hence, we make two plots showing each model's feature importance.
+
+```{r,fig.cap="Figure 5.3.2 - Feature Importance Plot of Forests}
+# set seed
+set.seed(1010)
+# Load the library to make the graph
+suppressMessages(library(lattice))
+# bagged forest with feature importance
+bagForest <- randomForest(diff~ ., data = crypto1 , mtry = 5, ntree = 1000, importance=TRUE)
+# random forest with feature importance
+randForest <- randomForest(diff~ ., data = crypto1 , mtry = sqrt(5), ntree = 1000, importance=TRUE)
+# feature importance plot
+barchart(sort(randomForest::importance(bagForest)[,1]),
+         xlab = "Percent Increase in MSE",
+         col = "blue")
+barchart(sort(randomForest::importance(bagForest)[,1]),
+         xlab = "Percent Increase in MSE",
+         col = "blue")
+```
+
+Based on Figure 5.3.2, it indicates that features market capitalization and open price are the two most important indicators in forest model prediction as they produce the highest percent increase in OOB Mean Square Error (RMSE is just taking the square root of it). Therefore, it confirms our conclusion regarding feature importance in this report, and we claim that feature market capitalization being the most important feature in prediction of price difference among all methods in our report. 
+
+In brief, among regression tree, bagged forest, and random forest, we believe that random forest model possess the best predictive ability since it produces the lowest RMSE value. It indicates that its prediction deviates the least from the truth. Also, according to the pruned tree figure and feature importance plot, we state that both features of market capitalization and open price are crucial in predicting the price difference of cryptocurrency. Although these models generally have high prediction accuracy as well as better interpretability, it is computationally expensive to train and predict for large data set, especially for the forest models that fit 1000 trees at the same time.
+
+## Section 6: Conclusion
+
+In conclusion, we attempted three different prediction methods in this report for the purpose of predicting how much close price changes from open price of the top 5 cryptocurrencies in the market. In specific, we applied Elastic Net regression model, KNN predicting algorithm, Regression Tree, Bagged Forest model, and Random Forest Model and assessed each model's predictive accuracy using 10-fold cross validation to compute RMSE. In general, we prefer the model/algorithm that produces the lowest RMSE value since it suggests that the prediction of the model/algorithm is closest to the true price difference. Moreover, regarding feature importance analysis for all methods, we conclude that feature market capitalization has the highest feature importance among all methods and contributes the most towards predicting the price difference of the top 5 cryptocurrencies. 
+
+```{r}
+Final_Comparison <- data.frame("Method" = c("Elastic Net","KNN","Pruned Tree","Bagged Forest","Random Forest"),
+                               "Test RMSE" = c(rmse.ElasticNet,rmse.knn,rmse.tree,rmse.bagForest,rmse.randomForest))
+Final_Comparison <- Final_Comparison[order(Final_Comparison$Test.RMSE),]
+knitr::kable(Final_Comparison,row.names = FALSE,caption="Summary of All Methods' Predictive Accuracy")
+```
+
+Table 7 exhibits a summary of prediction ability of all models/algorithms. Although we find that random forest has the lowest RMSE value among all methods, the top 3 models (random forest, elastic net, and bagged forest) according to RMSE metrics are quite close to one another, even in the cryptocurrency market where prices are sensitive measures. Therefore, we would apply random forest, elastic net, and bagged forest in practice for predicting the price difference between close and open price of the top 5 cryptocurrencies, but we would not implement KNN and pruned tree in practice since they deviate more from the truth than our expectation.
+
+## Work Cited
+
+Every Cryptocurrency Daily Market Price, Version 17. Retrieved April 8, 2024 from https://www.kaggle.com/datasets/jessevent/all-crypto-currencies/data.
